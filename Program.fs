@@ -9,61 +9,93 @@ type OpFun = int -> int -> int
 
 type Token =
     | Op of OpFun
-    | Integer of int
+    | Number of int
 
-let parseToken (word: string): Token option =
-    let number = 
-        try Some(int word)
-        with
-        | :? FormatException -> None 
-    if number.IsSome then Some(Integer(number.Value))
-    else 
-        match word with
-        | "+" -> Some(Op(addOp))
-        | "-" -> Some(Op(subOp))
-        | "*" -> Some(Op(mulOp))
-        | "/" -> Some(Op(divOp))
-        | _ -> None
+let parseNumber word =
+    try
+        word |> int |> Some
+    with :? FormatException -> None 
+
+let parseToken word =
+    match word with
+    | "+" -> addOp |> Op |> Ok
+    | "-" -> subOp |> Op |> Ok
+    | "*" -> mulOp |> Op |> Ok
+    | "/" -> divOp |> Op |> Ok
+    | _ -> 
+        match parseNumber word with
+        | Some i -> i |> Number |> Ok 
+        | None -> Error "Failed to parse word"
 
 let isSome (option: Token option) = option.IsSome
 
+let chooseOk (result: Result<Token, string>) =
+    match result with
+    | Ok token -> Some token
+    | Error _ -> None
+
+let chooseError (result: Result<Token, string>) =
+    match result with
+    | Ok _ -> None
+    | Error msg -> Some msg
+
+
 let tokenize (input: string) =
-    let words = (input.Split " ") |> Array.toList
-    words |> List.choose parseToken
-
-exception EvaluationException
-
-let rec evaluate (expression: Token list) : int option =
-    if expression.IsEmpty then None
-    else if expression.Length <= 2 then
+    let words = input.Split " " |> Array.toList
+    let results = words |> List.map parseToken
+    let tokens = List.choose chooseOk results
+    let errors = List.choose chooseError results
+    if errors.Length > 0 then errors[0] |> Error
+    else Ok tokens
+    
+let rec evaluate (expression: Token list) =
+    if expression.IsEmpty then Error "Empty expression"
+    else if expression.Length <= 1 then
         match expression[0] with
-        | Integer (i) -> Some(i)
-        | _ -> None
+        | Number i -> Ok i
+        | _ -> Error "Unexpected token"
     else
-    try
-        let tokens = expression |> List.take 3
+        let lhs = 
+            match expression[0] with 
+            | Number i -> Ok i 
+            | _ -> Error "Unexpected token"
 
-        let lhs = match tokens[0] with | Integer(i) -> i | _ -> raise EvaluationException
-        let op = match tokens[1] with | Op(fn) -> fn | _ -> raise EvaluationException
-        let rhs = match tokens[2] with | Integer(i) -> i | _ -> raise EvaluationException
+        let op = 
+            match expression[1] with 
+            | Op fn -> Ok fn 
+            | _ -> Error "Unexpected token"
 
-        let calculated = op lhs rhs
-        let reducedExpression = Integer(calculated) :: (expression |> List.skip 3)
-        evaluate reducedExpression
-    with
-    | EvaluationException -> None
+        let rhs = 
+            match expression[2] with 
+            | Number i  -> Ok i 
+            | _ -> Error "Unexpected token"
+
+        let calculated = 
+            match lhs, op, rhs with
+            | Error msg, _, _ -> Error msg
+            | _, Error msg, _ -> Error msg
+            | _, _, Error msg -> Error msg
+            | Ok lhs, Ok op, Ok rhs -> op lhs rhs |> Ok
+
+        match calculated with
+        | Ok number -> 
+            let reducedExpression = Number(number) :: (expression |> List.skip 3)
+            evaluate reducedExpression
+        | Error msg -> Error msg
 
 let rec loop () =
     printf ">> "
     let input = Console.ReadLine()
-    let expression = tokenize input
-    let result = evaluate expression
+    let result = 
+        tokenize input
+        |> Result.bind evaluate
+        |> Result.map (fun x -> x.ToString())
 
     match result with
-    | Some(i) -> i.ToString()
-    | None -> "Virhe"
+    | Ok result -> result
+    | Error error -> error |> sprintf "Error: %s"
     |> printfn "%s"
-
+    
     loop ()
 
 loop()
